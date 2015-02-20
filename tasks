@@ -1,0 +1,186 @@
+#############################################
+##		Task 1: Data Munging		 ##
+#############################################
+data(ChickWeight)
+
+#Obtain data overlook
+head(ChickWeight)
+
+#Check data integrity
+dim(ChickWeight)[1]/12 ==50
+#FALSE:there are record missing for a few chickens
+
+library(dplyr)
+
+#Checking which chickens that lack full record
+by_chick<-group_by(ChickWeight,Chick)
+summarise(by_chick,n=n())
+
+#Chick 18 has 2 records
+#Chick 16 has 7 records
+#Chick 15 has 8 records
+#Chick 8 has 11 records
+#Chick 44 has 10 records
+#12*45+38=578
+
+#Subsetting dataset
+NewChick<-ChickWeight[!ChickWeight$Chick %in% c(18,16,15,8,44),]
+Chick_Final<-subset(NewChick,Time==21)
+
+#Grouping dataset by Diet
+by_newchick<-group_by(Chick_Final,Diet)
+ruler<-seq(0,4,1)
+
+#Counting total chickens in each Diet group
+final_count<-hist(as.numeric(Chick_Final$Diet),ruler,plot=F)$count
+
+#Creating summary table
+sum<-summarise(by_newchick,mean(weight),sd(weight))
+sum_table<-cbind(sum,final_count)
+sorted <- arrange(sum_table,desc(final_count))
+print(sorted)
+
+#Initial impression: 
+#There seems to be differences among the means by Diet group
+#Sample sizes for different Diet groups vary, after the deletion of invalid observations
+#The assumption of equal variances may/may not hold
+#Further testing is required for Diet significance on final weight
+
+#Possible Action Items: 
+#1. Investigate if Diets randomly assigned to the chickens(Can we assume independence)?
+#2. Plot histogram of weights(Is the sample approximately normally distributed)?
+#3. Check equal variance assumption: max(sd)< 2*min(sd) (assumption met)
+
+#############################################
+##	Task 2: Statistical Analysis		 ##
+#############################################
+
+#I choose to conduct an Analysis of Covariance (ANCOVA)
+#Weight at Time=0 will be considered as covariate
+#This will increase the power of the test
+
+install.packages('ggplot2', dependencies = TRUE)
+library(ggplot2)
+
+#Extracting chicken's initial weight at birth
+Chick_Initial<-subset(NewChick,Time==0)
+
+#Combinining data set to include both initial and final weights
+Chick_Diet<-cbind(chick=Chick_Final$Chick,diet=Chick_Final$Diet,
+	initial=Chick_Initial$weight,final=Chick_Final$weight)
+Chick_Diet<-as.data.frame(Chick_Diet)
+
+#After some graphical investigation as below
+#<<<<<ggplot(Chick_Diet,aes(x=Chick_Diet[,3], y=Chick_Diet[,4],color=diet))+
+#	geom_point(color=Chick_Diet[,2])>>>>>
+#I decided to exclude a covariate in the model
+#Initial weights in this particular data set has a range of (39,43)
+#The difference is regarded negligible 
+
+#Checking distribution within Diet groups
+boxplot(Chick_Diet$final~ Chick_Diet$diet)
+
+#Welch correction for nonhomogeneity
+oneway.test(Chick_Diet$final~ Chick_Diet$diet)
+
+#No Welch correction for nonhomogeneity
+Chick_Diet$diet<-factor(Chick_Diet$diet)
+test_no_correction<-aov(Chick_Diet$final~ Chick_Diet$diet)
+summary(test_no_correction)
+
+#We have significant evidence (p-value<0.05)
+#to reject the null hypothesis
+#and conclude that all diets are not equal
+
+
+#Possible Action Items: 
+#Conduct Tukey Pairwise comparison of treatment means 
+TukeyHSD(test_no_correction)
+
+
+#############################################
+##		Task 3: Simulation		 ##
+#############################################
+
+#Subsetting only diet group 1 and 4
+Chick_Final$Diet<-as.numeric(Chick_Final$Diet)
+Chick_1vs4<-subset(Chick_Final,((Chick_Final$Diet==1)|(Chick_Final$Diet==4)))
+d_mean<-{}
+
+#Creating function to return difference in means
+get_diff<-function(x){
+
+	B<-sample(1:25,9,replace=F)
+	B<-sort(B)
+	A<-c(1:25)
+	A<-A[!A %in% B]
+
+	Chick_1vs4$Diet[c(B)]<-"B"
+	Chick_1vs4$Diet[c(A)]<-"A"
+
+	tapply(Chick_1vs4$weight,Chick_1vs4$Diet,mean)
+	diff<-tapply(Chick_1vs4$weight,Chick_1vs4$Diet,mean)[2]-tapply(Chick_1vs4$weight,Chick_1vs4$Diet,mean)[1]
+
+	d_mean<-rbind(d_mean,diff)
+	return(d_mean)
+}
+
+#Performing simulation for 5000 times
+simu_result<-replicate(5000,get_diff(set.seed(round(runif(1,1000000)))))
+print(simu_result)
+
+#System.time() returned 13.81 seconds of runtime
+#The efficiency of this program should be improved
+
+#Actual data yielded difference in means of 60.80556
+exceed_pct<-sum(simu_result>=60.80556)/5000
+print(exceed_pct)
+
+#Around 0.005 or 0.5% of the times 
+#the observed difference in means equal or exceed 
+#the difference in mean found in actual data for diet group 1 and 4
+#This strengthen the previous conclusion from 
+#pairwise comparison that diet group 1 and 4 are no different
+#(with a p-value of 0.1192661>0.05)
+
+
+#############################################
+##		   Task 4: Plotting		 ##
+#############################################
+
+require(ggplot2)
+
+#Giving each diet group its own name by looping
+for (i in (1:4)){
+	assign(paste("diet",i,sep=""),Chick_Diet[which(Chick_Diet$diet==i),])
+}
+
+#Chicken growth under diet 1
+gg1<-ggplot(diet1,aes(x=diet1$chick,y=diet1$initial))+geom_point(size=2,color="red") + 
+geom_errorbar(aes(ymax=diet1$final,ymin=diet1$initial))+ coord_cartesian(ylim = c(0, 350))+ 
+xlab("Chick Growth on Diet 1") + ylab("Growth") + scale_x_continuous(breaks=c(1,5,10,15))
+
+#Chicken growth under diet 2
+gg2<-ggplot(diet2,aes(x=diet2$chick,y=diet2$initial))+geom_point(size=2,color="green") + 
+geom_errorbar(aes(ymax=diet2$final,ymin=diet2$initial))+ coord_cartesian(ylim = c(0, 350))+ 
+xlab("Chick Growth on Diet 2") + ylab("Growth") + scale_x_continuous(breaks=c(20,25,30))
+
+#Chicken growth under diet 3
+gg3<-ggplot(diet3,aes(x=diet3$chick,y=diet3$initial))+geom_point(size=2,color="blue") + 
+geom_errorbar(aes(ymax=diet3$final,ymin=diet3$initial))+ coord_cartesian(ylim = c(0, 350))+ 
+xlab("Chick Growth on Diet 3") + ylab("Growth") + scale_x_continuous(breaks=c(30,35,40))
+
+#Chicken growth under diet 4
+gg4<-ggplot(diet4,aes(x=diet4$chick,y=diet4$initial))+geom_point(size=2,color="orange") + 
+geom_errorbar(aes(ymax=diet4$final,ymin=diet4$initial))+ coord_cartesian(ylim = c(0, 350))+ 
+xlab("Chick Growth on Diet 4") + ylab("Growth")+ scale_x_continuous(breaks=c(35,40,45,50))
+
+#printing 4 graphs on 1 page
+#each diet group on its own
+library(grid)
+library(gridExtra)
+grid.arrange(gg1,gg2,gg3,gg4,ncol=2)
+
+#It seems that Diet 3(literally off-the-chart!) appears to be the best choice 
+#for a farmer raising chickens
+
